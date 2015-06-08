@@ -71,12 +71,13 @@ import java.util.concurrent.atomic.AtomicInteger;
     _agg = ((AGG)E.parse())._aggs;
 
     // parse order by
-    s = E.parse();
-    if( s instanceof ASTLongList ) _orderByCols = ((ASTLongList)s)._l;
-    else if( s instanceof ASTNum ) _orderByCols = new long[]{(long)((ASTNum)s)._d};
-    else if( s instanceof ASTNull) _orderByCols = null;
-    else throw new IllegalArgumentException("Order by column must be an index or list of indexes. Got " + s.getClass());
-
+    if( E.isEnd() ) {
+      s = E.parse();
+      if ( s instanceof ASTLongList ) _orderByCols = ((ASTLongList) s)._l;
+      else if ( s instanceof ASTNum ) _orderByCols = new long[]{(long) ((ASTNum) s)._d};
+      else if( s instanceof ASTNull ) _orderByCols = null;
+      else throw new IllegalArgumentException("Order by column must be an index or list of indexes. Got " + s.getClass());
+    }
     E.eatEnd();
     ASTGroupBy res = (ASTGroupBy)clone();
     res._asts = new AST[]{ary};

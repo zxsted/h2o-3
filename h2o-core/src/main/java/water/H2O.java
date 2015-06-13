@@ -4,6 +4,7 @@ import hex.ModelBuilder;
 import jsr166y.CountedCompleter;
 import jsr166y.ForkJoinPool;
 import jsr166y.ForkJoinWorkerThread;
+import org.eclipse.jetty.util.Jetty;
 import water.api.RequestServer;
 import water.exceptions.H2OFailException;
 import water.exceptions.H2OIllegalArgumentException;
@@ -1306,6 +1307,16 @@ final public class H2O {
     // Clouds. This will typically trigger a round of Paxos voting so we can
     // join an existing Cloud.
     new HeartBeatThread().start();
+
+    JettyHTTPD jetty = new JettyHTTPD();
+    try {
+      jetty.start(ARGS.port, ARGS.baseport);
+    }
+    catch (Exception e) {
+      e.printStackTrace();
+      H2O.exit(1);
+    }
+    Log.info("Jetty started on port " + jetty.getPort());
 
     if (GA != null)
       startGAStartupReport();

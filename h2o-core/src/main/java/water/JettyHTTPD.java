@@ -17,15 +17,37 @@ import org.eclipse.jetty.server.handler.AbstractHandler;
 import org.eclipse.jetty.server.Server;
 import water.util.FileUtils;
 
+/**
+ * Embedded Jetty instance inside H2O.
+ * This is intended to be a singleton per H2O node.
+ */
 public class JettyHTTPD {
+  // The actual port chosen port number.
   private int _port;
+
+  // Jetty server object.
   private Server _server;
 
+  /**
+   * Create bare Jetty object.
+   */
   public JettyHTTPD() {
   }
 
+  /**
+   * Returns the actual chosen port number by the start() method.
+   * @return Port number
+   */
   int getPort() { return _port; }
 
+  /**
+   * Choose a port and start the Jetty server.
+   *
+   * @param port If specified, this exact port must be used successfully or an exception is thrown.
+   * @param baseport Base port number to start looking for ports at.  Walk up to find a free one.
+   *                 If none is found before crossing 65k, throw an exception.
+   * @throws Exception
+   */
   public void start(int port, int baseport) throws Exception {
     if (port != 0) {
       int possiblePort = port + 1000;
@@ -42,23 +64,37 @@ public class JettyHTTPD {
           registerHandlers();
           _server.start();
           _port = possiblePort;
-          break;
+          return;
         } catch (java.net.BindException e) {
           baseport += 2;
         }
       }
+
+      throw new Exception("No available port found");
     }
   }
 
+  /**
+   * Stop Jetty server after it has been started.
+   * This is unlikely to ever be called by H2O until H2O supports graceful shutdown.
+   *
+   * @throws Exception
+   */
   public void stop() throws Exception {
     _server.stop();
   }
 
+  /**
+   * Hook up Jetty handlers.  Do this before start() is called.
+   */
   private void registerHandlers() {
     _server.setHandler(new H2OHandler());
   }
 
-  public static class H2OHandler extends AbstractHandler {
+  /**
+   * A handler class that passes basic Jetty requests Nano-style to H2O.
+   */
+  private static class H2OHandler extends AbstractHandler {
     public H2OHandler() {}
 
     public void handle(String target,
@@ -66,7 +102,7 @@ public class JettyHTTPD {
                        HttpServletRequest request,
                        HttpServletResponse response) throws IOException, ServletException {
       // Marshal Jetty request parameters to Nano-style.
-      // Nano serve() uri parameter is target.
+      // Nano serve() 'uri' parameter is Jetty handler 'target' parameter.
       String method = request.getMethod();
 
       Properties headers = new Properties();

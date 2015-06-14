@@ -11,10 +11,10 @@ import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
-import org.eclipse.jetty.server.Request;
+import org.eclipse.jetty.server.*;
 import org.eclipse.jetty.server.handler.AbstractHandler;
 
-import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.util.ssl.SslContextFactory;
 import water.util.FileUtils;
 
 /**
@@ -49,6 +49,10 @@ public class JettyHTTPD {
    * @throws Exception
    */
   public void start(int port, int baseport) throws Exception {
+    startHttps(port, baseport);
+  }
+
+  private void startHttp(int port, int baseport) throws Exception {
     if (port != 0) {
       int possiblePort = port + 1000;
       _server = new Server(possiblePort);
@@ -74,12 +78,37 @@ public class JettyHTTPD {
     }
   }
 
-  /**
-   * Stop Jetty server after it has been started.
-   * This is unlikely to ever be called by H2O until H2O supports graceful shutdown.
-   *
-   * @throws Exception
-   */
+  private void startHttps(int port, int baseport) throws Exception {
+    int httpsPort = ((port != 0) ? port : baseport) + 1000;
+
+    _server = new Server();
+    HttpConfiguration http_config = new HttpConfiguration();
+    http_config.setSecureScheme("https");
+    http_config.setSecurePort(httpsPort);
+
+    HttpConfiguration https_config = new HttpConfiguration(http_config);
+    https_config.addCustomizer(new SecureRequestCustomizer());
+
+    SslContextFactory sslContextFactory = new SslContextFactory("h2o.jks");
+    sslContextFactory.setKeyStorePassword("h2oh2o");
+
+    ServerConnector httpsConnector =
+            new ServerConnector(_server,
+                                new SslConnectionFactory(sslContextFactory, "http/1.1"),
+                                new HttpConnectionFactory(https_config));
+    httpsConnector.setPort(httpsPort);
+
+    _server.setConnectors(new Connector[]{ httpsConnector });
+    registerHandlers();
+    _server.start();
+  }
+
+    /**
+     * Stop Jetty server after it has been started.
+     * This is unlikely to ever be called by H2O until H2O supports graceful shutdown.
+     *
+     * @throws Exception
+     */
   public void stop() throws Exception {
     _server.stop();
   }

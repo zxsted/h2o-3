@@ -78,6 +78,13 @@ public class JettyHTTPD {
     }
   }
 
+  /**
+   * This implementation is based on http://blog.denevell.org/jetty-9-ssl-https.html
+   *
+   * @param port See start()
+   * @param baseport See start()
+   * @throws Exception
+   */
   private void startHttps(int port, int baseport) throws Exception {
     int httpsPort = ((port != 0) ? port : baseport) + 1000;
 

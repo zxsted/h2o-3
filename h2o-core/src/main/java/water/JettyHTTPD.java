@@ -6,14 +6,18 @@ import java.io.OutputStream;
 import java.util.Enumeration;
 import java.util.Map;
 import java.util.Properties;
-
+import java.util.Collections;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-
+import org.eclipse.jetty.security.ConstraintMapping;
+import org.eclipse.jetty.security.ConstraintSecurityHandler;
+import org.eclipse.jetty.security.HashLoginService;
+import org.eclipse.jetty.security.LoginService;
+import org.eclipse.jetty.security.authentication.BasicAuthenticator;
 import org.eclipse.jetty.server.*;
 import org.eclipse.jetty.server.handler.AbstractHandler;
-
+import org.eclipse.jetty.util.security.Constraint;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import water.util.FileUtils;
 
@@ -49,25 +53,62 @@ public class JettyHTTPD {
    * @throws Exception
    */
   public void start(int port, int baseport) throws Exception {
-    startHttps(port, baseport);
+    startHttp(port, baseport);
+  }
+
+  private void createServer(int port) throws Exception {
+    _server = new Server(port);
+
+    boolean hasCustomAuthorizationHandler = false;
+    if (hasCustomAuthorizationHandler) {
+      // REFER TO http://www.eclipse.org/jetty/documentation/9.1.4.v20140401/embedded-examples.html#embedded-secured-hello-handler
+
+      // CustomAuthorizationService.createHandler(_server, new H2OHandler());
+
+      // Dummy login service - replace with pluggable auth.
+      LoginService loginService = new HashLoginService("MyRealm","src/test/resources/realm.properties");
+      _server.addBean(loginService);
+
+      // Set a security handler as the first handler in the chain.
+      ConstraintSecurityHandler security = new ConstraintSecurityHandler();
+      _server.setHandler(security);
+
+      // Set up a constraint to authenticate all calls, and allow certain roles in.
+      Constraint constraint = new Constraint();
+      constraint.setName("auth");
+      constraint.setAuthenticate( true );
+      constraint.setRoles(new String[]{"user", "admin"});
+
+      ConstraintMapping mapping = new ConstraintMapping();
+      mapping.setPathSpec( "/*" ); // Lock down all API calls
+      mapping.setConstraint(constraint);
+      security.setConstraintMappings(Collections.singletonList(mapping));
+
+      // Authentication / Authorization
+      security.setAuthenticator(new BasicAuthenticator());
+      security.setLoginService(loginService);
+
+      // Pass-through to H2O if authenticated.
+      security.setHandler(new H2OHandler());
+
+    } else {
+      _server.setHandler(new H2OHandler());
+    }
+
+    _server.start();
+    _port = port;
   }
 
   private void startHttp(int port, int baseport) throws Exception {
     if (port != 0) {
       int possiblePort = port + 1000;
-      _server = new Server(possiblePort);
-      registerHandlers();
-      _server.start();
-      _port = possiblePort;
+      createServer(possiblePort);
     }
     else {
       while ((baseport + 1000) < (1<<16)) {
         try {
           int possiblePort = baseport + 1000;
-          _server = new Server(possiblePort);
-          registerHandlers();
-          _server.start();
-          _port = possiblePort;
+          createServer(possiblePort);
           return;
         } catch (java.net.BindException e) {
           baseport += 2;

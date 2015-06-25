@@ -8,15 +8,15 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Collections;
 import javax.servlet.ServletException;
+import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import org.eclipse.jetty.security.ConstraintMapping;
-import org.eclipse.jetty.security.ConstraintSecurityHandler;
-import org.eclipse.jetty.security.HashLoginService;
-import org.eclipse.jetty.security.LoginService;
+
+import org.eclipse.jetty.security.*;
 import org.eclipse.jetty.security.authentication.BasicAuthenticator;
 import org.eclipse.jetty.server.*;
-import org.eclipse.jetty.server.handler.AbstractHandler;
+import org.eclipse.jetty.server.handler.HandlerWrapper;
+import org.eclipse.jetty.servlet.ServletContextHandler;
 import org.eclipse.jetty.util.security.Constraint;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import water.util.FileUtils;
@@ -59,14 +59,17 @@ public class JettyHTTPD {
   private void createServer(int port) throws Exception {
     _server = new Server(port);
 
-    boolean hasCustomAuthorizationHandler = false;
+    boolean hasCustomAuthorizationHandler = true;
     if (hasCustomAuthorizationHandler) {
       // REFER TO http://www.eclipse.org/jetty/documentation/9.1.4.v20140401/embedded-examples.html#embedded-secured-hello-handler
 
       // CustomAuthorizationService.createHandler(_server, new H2OHandler());
 
       // Dummy login service - replace with pluggable auth.
-      LoginService loginService = new HashLoginService("MyRealm","src/test/resources/realm.properties");
+      LoginService loginService = new HashLoginService("H2O","realm.properties");
+//      LoginService loginService = new JettyH2OLoginService("H2O", "realm.properties");
+      IdentityService identityService = new DefaultIdentityService();
+      loginService.setIdentityService(identityService);
       _server.addBean(loginService);
 
       // Set a security handler as the first handler in the chain.
@@ -89,10 +92,9 @@ public class JettyHTTPD {
       security.setLoginService(loginService);
 
       // Pass-through to H2O if authenticated.
-      security.setHandler(new H2OHandler());
-
+      registerHandlers(security);
     } else {
-      _server.setHandler(new H2OHandler());
+      registerHandlers(_server);
     }
 
     _server.start();
@@ -147,16 +149,16 @@ public class JettyHTTPD {
     httpsConnector.setPort(httpsPort);
 
     _server.setConnectors(new Connector[]{ httpsConnector });
-    registerHandlers();
+    registerHandlers(_server);
     _server.start();
   }
 
-    /**
-     * Stop Jetty server after it has been started.
-     * This is unlikely to ever be called by H2O until H2O supports graceful shutdown.
-     *
-     * @throws Exception
-     */
+  /**
+   * Stop Jetty server after it has been started.
+   * This is unlikely to ever be called by H2O until H2O supports graceful shutdown.
+   *
+   * @throws Exception
+   */
   public void stop() throws Exception {
     _server.stop();
   }
@@ -164,23 +166,74 @@ public class JettyHTTPD {
   /**
    * Hook up Jetty handlers.  Do this before start() is called.
    */
-  private void registerHandlers() {
-    _server.setHandler(new H2OHandler());
+  private void registerHandlers(HandlerWrapper s) {
+    ServletContextHandler context = new ServletContextHandler(
+            ServletContextHandler.SECURITY | ServletContextHandler.SESSIONS
+    );
+    context.setContextPath("/");
+    s.setHandler(context);
+
+    context.addServlet(H2oNpsBinServlet.class, "/3/NodePersistentStorage.bin/*");
+    context.addServlet(H2oDefaultServlet.class, "/");
   }
 
-  /**
-   * A handler class that passes basic Jetty requests Nano-style to H2O.
-   */
-  private static class H2OHandler extends AbstractHandler {
-    public H2OHandler() {}
+  @SuppressWarnings("serial")
+  public static class H2oNpsBinServlet extends HttpServlet
+  {
+    @Override
+    protected void doGet( HttpServletRequest request,
+                          HttpServletResponse response ) throws IOException, ServletException {
+      setCommonResponseHttpHeaders(response);
+      response.setContentType("application/octet-stream");
+      response.setStatus(HttpServletResponse.SC_OK);
+    }
+  }
 
-    public void handle(String target,
-                       Request baseRequest,
-                       HttpServletRequest request,
-                       HttpServletResponse response) throws IOException, ServletException {
+  private static void setCommonResponseHttpHeaders(HttpServletResponse response) {
+    response.setHeader("X-h2o-build-project-version", H2O.ABV.projectVersion());
+    response.setHeader("X-h2o-rest-api-version-max", Integer.toString(water.api.RequestServer.H2O_REST_API_VERSION));
+    response.setHeader("X-h2o-cluster-id", Long.toString(H2O.CLUSTER_ID));
+  }
+
+  @SuppressWarnings("serial")
+  public static class H2oDefaultServlet extends HttpServlet {
+    @Override
+    protected void doGet(HttpServletRequest request,
+                         HttpServletResponse response) throws IOException, ServletException {
+      doGeneric("GET", request, response);
+    }
+
+    @Override
+    protected void doPost(HttpServletRequest request,
+                         HttpServletResponse response) throws IOException, ServletException {
+      doGeneric("POST", request, response);
+    }
+
+    @Override
+    protected void doHead(HttpServletRequest request,
+                          HttpServletResponse response) throws IOException, ServletException {
+      doGeneric("HEAD", request, response);
+    }
+
+    @Override
+    protected void doDelete(HttpServletRequest request,
+                          HttpServletResponse response) throws IOException, ServletException {
+      doGeneric("DELETE", request, response);
+    }
+
+    @Override
+    protected void doPut(HttpServletRequest request,
+                            HttpServletResponse response) throws IOException, ServletException {
+      doGeneric("PUT", request, response);
+    }
+
+    public void doGeneric(String method,
+                          HttpServletRequest request,
+                          HttpServletResponse response) throws IOException, ServletException {
       // Marshal Jetty request parameters to Nano-style.
-      // Nano serve() 'uri' parameter is Jetty handler 'target' parameter.
-      String method = request.getMethod();
+
+      // Note that getServletPath does an un-escape so that the %24 of job id's are turned into $ characters.
+      String uri = request.getServletPath();
 
       Properties headers = new Properties();
       Enumeration<String> en = request.getHeaderNames();
@@ -202,7 +255,7 @@ public class JettyHTTPD {
       }
 
       // Make Nano call.
-      NanoHTTPD.Response resp = water.api.RequestServer.SERVER.serve(target, method, headers, parms);
+      NanoHTTPD.Response resp = water.api.RequestServer.SERVER.serve(uri, method, headers, parms);
 
       // Un-marshal Nano response back to Jetty.
       String choppedNanoStatus = resp.status.substring(0, 3);
@@ -223,9 +276,6 @@ public class JettyHTTPD {
       OutputStream os = response.getOutputStream();
       InputStream is = resp.data;
       FileUtils.copyStream(is, os, 1024);
-
-      // Mark Jetty request handled and return the response.
-      baseRequest.setHandled(true);
     }
   }
 }

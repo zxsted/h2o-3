@@ -7,7 +7,7 @@ package water.api;
  * the webpage, or the help type that displays the extended help for the
  * request.
  */
-enum RequestType {
+public enum RequestType {
   json , // json type request, a result is a JSON structure
   html , // webpage request
   help , // should display the help on the given request
@@ -22,7 +22,7 @@ enum RequestType {
   /** Returns the request type of a given URL. 
    *  Missing type defaults to HTML.
    *  Unknown type defaults to JSON. */
-  static RequestType requestType(String url) {
+  public static RequestType requestType(String url) {
     int i = url.indexOf('.');
     if(  i == -1 ) return json; // Default for no extension
     String s = url.substring(i+1);

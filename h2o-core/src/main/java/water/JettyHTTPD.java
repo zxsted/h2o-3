@@ -1,12 +1,18 @@
 package water;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.MalformedURLException;
+import java.net.URLDecoder;
 import java.util.Enumeration;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Collections;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
@@ -19,7 +25,16 @@ import org.eclipse.jetty.server.handler.HandlerWrapper;
 import org.eclipse.jetty.servlet.ServletContextHandler;
 import org.eclipse.jetty.util.security.Constraint;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
+import water.api.H2OErrorV3;
+import water.api.H2OModelBuilderErrorV3;
+import water.api.RequestType;
+import water.exceptions.H2OAbstractRuntimeException;
+import water.exceptions.H2OFailException;
+import water.exceptions.H2OModelBuilderIllegalArgumentException;
+import water.init.NodePersistentStorage;
 import water.util.FileUtils;
+import water.util.HttpResponseStatus;
+import water.util.Log;
 
 /**
  * Embedded Jetty instance inside H2O.
@@ -59,7 +74,7 @@ public class JettyHTTPD {
   private void createServer(int port) throws Exception {
     _server = new Server(port);
 
-    boolean hasCustomAuthorizationHandler = true;
+    boolean hasCustomAuthorizationHandler = false;
     if (hasCustomAuthorizationHandler) {
       // REFER TO http://www.eclipse.org/jetty/documentation/9.1.4.v20140401/embedded-examples.html#embedded-secured-hello-handler
 
@@ -184,8 +199,85 @@ public class JettyHTTPD {
     protected void doGet( HttpServletRequest request,
                           HttpServletResponse response ) throws IOException, ServletException {
       setCommonResponseHttpHeaders(response);
-      response.setContentType("application/octet-stream");
-      response.setStatus(HttpServletResponse.SC_OK);
+
+      Pattern p2 = Pattern.compile(".*/NodePersistentStorage.bin/([^/]+)/([^/]+)");
+      String uri = getDecodedUri(request);
+      Matcher m2 = p2.matcher(uri);
+      boolean b2 = m2.matches();
+      if (! b2) {
+        response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        return;
+      }
+
+      try {
+        String categoryName = m2.group(1);
+        String keyName = m2.group(2);
+        NodePersistentStorage nps = H2O.getNPS();
+        AtomicLong length = new AtomicLong();
+        InputStream is = nps.get(categoryName, keyName, length);
+        response.setContentType("application/octet-stream");
+        response.setContentLengthLong(length.get());
+        response.addHeader("Content-Disposition", "attachment; filename=" + keyName + ".flow");
+        response.setStatus(HttpServletResponse.SC_OK);
+        OutputStream os = response.getOutputStream();
+        water.util.FileUtils.copyStream(is, os, 2048);
+      }
+      catch (Exception e) {
+        sendErrorResponse(response, e, request.getServletPath());
+      }
+    }
+  }
+
+  private static void sendErrorResponse(HttpServletResponse response, Exception e, String uri) {
+    if (e instanceof H2OFailException) {
+      H2OFailException ee = (H2OFailException) e;
+      H2OError error = ee.toH2OError(uri);
+
+      Log.fatal("Caught exception (fatal to the cluster): " + error.toString());
+      H2O.fail(error.toString());
+    }
+    else if (e instanceof H2OAbstractRuntimeException) {
+      H2OAbstractRuntimeException ee = (H2OAbstractRuntimeException) e;
+      H2OError error = ee.toH2OError(uri);
+
+      Log.warn("Caught exception: " + error.toString());
+      response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+
+      // Note: don't use Schema.schema(version, error) because we have to work at bootstrap:
+      try {
+        response.getWriter().write(new H2OErrorV3().fillFromImpl(error).toJsonString());
+      }
+      catch (Exception ignore) {}
+    }
+    else { // make sure that no Exception is ever thrown out from the request
+      H2OError error = new H2OError(e, uri);
+
+      // some special cases for which we return 400 because it's likely a problem with the client request:
+      if (e instanceof IllegalArgumentException)
+        error._http_status = HttpResponseStatus.BAD_REQUEST.getCode();
+      else if (e instanceof FileNotFoundException)
+        error._http_status = HttpResponseStatus.BAD_REQUEST.getCode();
+      else if (e instanceof MalformedURLException)
+        error._http_status = HttpResponseStatus.BAD_REQUEST.getCode();
+      response.setStatus(error._http_status);
+
+      Log.warn("Caught exception: " + error.toString());
+
+      // Note: don't use Schema.schema(version, error) because we have to work at bootstrap:
+      try {
+        response.getWriter().write(new H2OErrorV3().fillFromImpl(error).toJsonString());
+      }
+      catch (Exception ignore) {}
+    }
+  }
+
+  private static String getDecodedUri(HttpServletRequest request) {
+    try {
+      String s = URLDecoder.decode(request.getRequestURI(), "UTF-8");
+      return s;
+    }
+    catch (Exception e) {
+      throw new RuntimeException(e);
     }
   }
 

@@ -36,6 +36,7 @@ import water.util.Log;
 public class JettyHTTPD {
   // The actual port chosen port number.
   private int _port;
+  private String _ip;
 
   // Jetty server object.
   private Server _server;
@@ -43,8 +44,9 @@ public class JettyHTTPD {
   /**
    * Create bare Jetty object.
    */
-  public JettyHTTPD(int port) {
+  public JettyHTTPD(int port, String ip) {
     _port = port;
+    _ip = ip;
   }
 
   /**
@@ -59,14 +61,20 @@ public class JettyHTTPD {
    * @throws Exception
    */
   public void start() throws Exception {
-    startHttp(_port);
+    startHttp();
   }
 
   public void acceptRequests() {
   }
 
-  private void createServer(int port) throws Exception {
-    _server = new Server(port);
+  private void createServer() throws Exception {
+    _server = new Server();
+    ServerConnector connector=new ServerConnector(_server);
+    if (_ip != null) {
+      connector.setHost(_ip);
+    }
+    connector.setPort(_port);
+    _server.setConnectors(new Connector[]{connector});
 
     boolean hasCustomAuthorizationHandler = false;
     if (hasCustomAuthorizationHandler) {
@@ -109,21 +117,20 @@ public class JettyHTTPD {
     _server.start();
   }
 
-  private void startHttp(int port) throws Exception {
-    createServer(port);
+  private void startHttp() throws Exception {
+    createServer();
   }
 
   /**
    * This implementation is based on http://blog.denevell.org/jetty-9-ssl-https.html
    *
-   * @param port See start()
    * @throws Exception
    */
-  private void startHttps(int port) throws Exception {
+  private void startHttps() throws Exception {
     _server = new Server();
     HttpConfiguration http_config = new HttpConfiguration();
     http_config.setSecureScheme("https");
-    http_config.setSecurePort(port);
+    http_config.setSecurePort(_port);
 
     HttpConfiguration https_config = new HttpConfiguration(http_config);
     https_config.addCustomizer(new SecureRequestCustomizer());
@@ -135,7 +142,10 @@ public class JettyHTTPD {
             new ServerConnector(_server,
                                 new SslConnectionFactory(sslContextFactory, "http/1.1"),
                                 new HttpConnectionFactory(https_config));
-    httpsConnector.setPort(port);
+    if (_ip != null) {
+      httpsConnector.setHost(_ip);
+    }
+    httpsConnector.setPort(_port);
 
     _server.setConnectors(new Connector[]{ httpsConnector });
     registerHandlers(_server);

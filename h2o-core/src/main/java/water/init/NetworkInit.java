@@ -345,7 +345,7 @@ public class NetworkInit {
         TCPReceiverThread.SOCK.socket().bind(isa);
 
         apiSocket.close();
-        H2O.jetty = new JettyHTTPD(H2O.API_PORT);
+        H2O.jetty = new JettyHTTPD(H2O.API_PORT, H2O.ARGS.ip);
         H2O.jetty.start();
         break;
       } catch (Exception e) {

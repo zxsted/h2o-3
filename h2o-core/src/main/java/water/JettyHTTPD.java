@@ -25,12 +25,10 @@ import org.eclipse.jetty.server.handler.HandlerWrapper;
 import org.eclipse.jetty.servlet.ServletContextHandler;
 import org.eclipse.jetty.util.security.Constraint;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
+
 import water.api.H2OErrorV3;
-import water.api.H2OModelBuilderErrorV3;
-import water.api.RequestType;
 import water.exceptions.H2OAbstractRuntimeException;
 import water.exceptions.H2OFailException;
-import water.exceptions.H2OModelBuilderIllegalArgumentException;
 import water.init.NodePersistentStorage;
 import water.util.FileUtils;
 import water.util.HttpResponseStatus;
@@ -193,25 +191,24 @@ public class JettyHTTPD {
   }
 
   @SuppressWarnings("serial")
-  public static class H2oNpsBinServlet extends HttpServlet
-  {
+  public static class H2oNpsBinServlet extends HttpServlet {
     @Override
-    protected void doGet( HttpServletRequest request,
-                          HttpServletResponse response ) throws IOException, ServletException {
+    protected void doGet(HttpServletRequest request,
+                         HttpServletResponse response) throws IOException, ServletException {
       setCommonResponseHttpHeaders(response);
-
-      Pattern p2 = Pattern.compile(".*/NodePersistentStorage.bin/([^/]+)/([^/]+)");
       String uri = getDecodedUri(request);
-      Matcher m2 = p2.matcher(uri);
-      boolean b2 = m2.matches();
-      if (! b2) {
+
+      Pattern p = Pattern.compile(".*/NodePersistentStorage.bin/([^/]+)/([^/]+)");
+      Matcher m = p.matcher(uri);
+      boolean b = m.matches();
+      if (!b) {
         response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
         return;
       }
 
       try {
-        String categoryName = m2.group(1);
-        String keyName = m2.group(2);
+        String categoryName = m.group(1);
+        String keyName = m.group(2);
         NodePersistentStorage nps = H2O.getNPS();
         AtomicLong length = new AtomicLong();
         InputStream is = nps.get(categoryName, keyName, length);
@@ -221,10 +218,35 @@ public class JettyHTTPD {
         response.setStatus(HttpServletResponse.SC_OK);
         OutputStream os = response.getOutputStream();
         water.util.FileUtils.copyStream(is, os, 2048);
-      }
-      catch (Exception e) {
+      } catch (Exception e) {
         sendErrorResponse(response, e, request.getServletPath());
       }
+    }
+
+    @Override
+    protected void doPost(HttpServletRequest request,
+                          HttpServletResponse response) throws IOException, ServletException {
+      setCommonResponseHttpHeaders(response);
+      String uri = getDecodedUri(request);
+
+      Pattern p = Pattern.compile(".*NodePersistentStorage.bin/([^/]+)/([^/]+)");
+      Matcher m = p.matcher(uri);
+      boolean b = m.matches();
+      if (!b) {
+        response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        return;
+      }
+
+      String categoryName = m.group(1);
+      String keyName = m.group(2);
+      H2O.getNPS().put(categoryName, keyName, request.getInputStream());
+      long length = H2O.getNPS().get_length(categoryName, keyName);
+      String responsePayload = "{ " +
+              "\"category\" : "     + "\"" + categoryName + "\", " +
+              "\"name\" : "         + "\"" + keyName      + "\", " +
+              "\"total_bytes\" : "  +        length       + " " +
+              "}";
+      response.getWriter().write(responsePayload);
     }
   }
 

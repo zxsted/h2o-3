@@ -12,6 +12,7 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import org.eclipse.jetty.jaas.JAASLoginService;
 import org.eclipse.jetty.security.*;
 import org.eclipse.jetty.security.authentication.BasicAuthenticator;
 import org.eclipse.jetty.server.*;
@@ -89,7 +90,7 @@ public class JettyHTTPD {
 
       // Dummy login service - replace with pluggable auth.
       LoginService loginService = new HashLoginService("H2O","realm.properties");
-//      LoginService loginService = new JettyH2OLoginService("H2O", "realm.properties");
+      JAASLoginService ls = new JAASLoginService();
       IdentityService identityService = new DefaultIdentityService();
       loginService.setIdentityService(identityService);
       _server.addBean(loginService);

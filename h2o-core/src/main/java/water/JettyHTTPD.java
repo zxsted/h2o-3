@@ -50,6 +50,7 @@ public class JettyHTTPD {
   public JettyHTTPD(int port, String ip) {
     _port = port;
     _ip = ip;
+    System.setProperty("org.eclipse.jetty.server.Request.maxFormContentSize", Integer.toString(Integer.MAX_VALUE));
   }
 
   /**

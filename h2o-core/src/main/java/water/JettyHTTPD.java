@@ -3,10 +3,7 @@ package water;
 import java.io.*;
 import java.net.MalformedURLException;
 import java.net.URLDecoder;
-import java.util.Enumeration;
-import java.util.Map;
-import java.util.Properties;
-import java.util.Collections;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -224,7 +221,13 @@ public class JettyHTTPD {
 
         String categoryName = m.group(1);
         String keyName = m.group(2);
-        H2O.getNPS().put(categoryName, keyName, request.getInputStream());
+
+        InputStream is = extractPartInputStream(request, response);
+        if (is == null) {
+          return;
+        }
+
+        H2O.getNPS().put(categoryName, keyName, is);
         long length = H2O.getNPS().get_length(categoryName, keyName);
         String responsePayload = "{ " +
                 "\"category\" : "     + "\"" + categoryName + "\", " +
@@ -266,8 +269,13 @@ public class JettyHTTPD {
         // JSON Payload returned is:
         //     { "destination_frame": "key_name", "total_bytes": nnn }
         //
+        InputStream is = extractPartInputStream(request, response);
+        if (is == null) {
+          return;
+        }
+
         UploadFileVec.ReadPutStats stats = new UploadFileVec.ReadPutStats();
-        UploadFileVec.readPut(destination_frame, request.getInputStream(), stats);
+        UploadFileVec.readPut(destination_frame, is, stats);
         String responsePayload = "{ "       +
                 "\"destination_frame\": \"" + destination_frame   + "\", " +
                 "\"total_bytes\": "         + stats.total_bytes + " " +
@@ -279,6 +287,36 @@ public class JettyHTTPD {
         sendErrorResponse(response, e, uri);
       }
     }
+  }
+
+  private static InputStream extractPartInputStream (HttpServletRequest request, HttpServletResponse response) throws IOException{
+    String ct = request.getContentType();
+    if (! ct.startsWith("multipart/form-data")) {
+      response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+      response.getWriter().write("Content type must be multipart/form-data");
+      return null;
+    }
+
+    String boundaryString;
+    int idx = ct.indexOf("boundary=");
+    if (idx < 0) {
+      response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+      response.getWriter().write("Boundary missing");
+      return null;
+    }
+
+    boundaryString = ct.substring(idx + "boundary=".length());
+    byte[] boundary = boundaryString.getBytes();
+
+    // Consume headers of the mime part.
+    InputStream is = request.getInputStream();
+    String line = readLine(is);
+    while ((line != null) && (line.trim().length()>0)) {
+      line = readLine(is);
+    }
+
+    InputStreamWrapper isw = new InputStreamWrapper(is, boundary);
+    return isw;
   }
 
   private static boolean validKeyName(String name) {
@@ -431,6 +469,152 @@ public class JettyHTTPD {
       OutputStream os = response.getOutputStream();
       InputStream is = resp.data;
       FileUtils.copyStream(is, os, 1024);
+    }
+  }
+
+  //--------------------------------------------------
+
+  private static String readLine(InputStream in) throws IOException {
+    StringBuilder sb = new StringBuilder();
+    byte[] mem = new byte[1024];
+    while (true) {
+      int sz = readBufOrLine(in,mem);
+      sb.append(new String(mem,0,sz));
+      if (sz < mem.length)
+        break;
+      if (mem[sz-1]=='\n')
+        break;
+    }
+    if (sb.length()==0)
+      return null;
+    String line = sb.toString();
+    if (line.endsWith("\r\n"))
+      line = line.substring(0,line.length()-2);
+    else if (line.endsWith("\n"))
+      line = line.substring(0,line.length()-1);
+    return line;
+  }
+
+  private static int readBufOrLine(InputStream in, byte[] mem) throws IOException {
+    byte[] bb = new byte[1];
+    int sz = 0;
+    while (true) {
+      byte b;
+      byte b2;
+      if (sz==mem.length)
+        break;
+      try {
+        in.read(bb,0,1);
+        b = bb[0];
+        mem[sz++] = b;
+      } catch (EOFException e) {
+        break;
+      }
+      if (b == '\n')
+        break;
+      if (sz==mem.length)
+        break;
+      if (b == '\r') {
+        try {
+          in.read(bb,0,1);
+          b2 = bb[0];
+          mem[sz++] = b2;
+        } catch (EOFException e) {
+          break;
+        }
+        if (b2 == '\n')
+          break;
+      }
+    }
+    return sz;
+  }
+
+  private static final class InputStreamWrapper extends InputStream {
+    static final byte[] BOUNDARY_PREFIX = { '\r', '\n', '-', '-' };
+    final InputStream _wrapped;
+    final byte[] _boundary;
+    final byte[] _lookAheadBuf;
+    int _lookAheadLen;
+
+    public InputStreamWrapper(InputStream is, byte[] boundary) {
+      _wrapped = is;
+      _boundary = Arrays.copyOf(BOUNDARY_PREFIX, BOUNDARY_PREFIX.length + boundary.length);
+      System.arraycopy(boundary, 0, _boundary, BOUNDARY_PREFIX.length, boundary.length);
+      _lookAheadBuf = new byte[_boundary.length];
+      _lookAheadLen = 0;
+    }
+
+    @Override public void close() throws IOException { _wrapped.close(); }
+    @Override public int available() throws IOException { return _wrapped.available(); }
+    @Override public long skip(long n) throws IOException { return _wrapped.skip(n); }
+    @Override public void mark(int readlimit) { _wrapped.mark(readlimit); }
+    @Override public void reset() throws IOException { _wrapped.reset(); }
+    @Override public boolean markSupported() { return _wrapped.markSupported(); }
+
+    @Override public int read() throws IOException { throw new UnsupportedOperationException(); }
+    @Override public int read(byte[] b) throws IOException { return read(b, 0, b.length); }
+    @Override public int read(byte[] b, int off, int len) throws IOException {
+      if(_lookAheadLen == -1)
+        return -1;
+      int readLen = readInternal(b, off, len);
+      if (readLen != -1) {
+        int pos = findBoundary(b, off, readLen);
+        if (pos != -1) {
+          _lookAheadLen = -1;
+          return pos - off;
+        }
+      }
+      return readLen;
+    }
+
+    private int readInternal(byte b[], int off, int len) throws IOException {
+      if (len < _lookAheadLen ) {
+        System.arraycopy(_lookAheadBuf, 0, b, off, len);
+        _lookAheadLen -= len;
+        System.arraycopy(_lookAheadBuf, len, _lookAheadBuf, 0, _lookAheadLen);
+        return len;
+      }
+
+      if (_lookAheadLen > 0) {
+        System.arraycopy(_lookAheadBuf, 0, b, off, _lookAheadLen);
+        off += _lookAheadLen;
+        len -= _lookAheadLen;
+        int r = Math.max(_wrapped.read(b, off, len), 0) + _lookAheadLen;
+        _lookAheadLen = 0;
+        return r;
+      } else {
+        return _wrapped.read(b, off, len);
+      }
+    }
+
+    private int findBoundary(byte[] b, int off, int len) throws IOException {
+      int bidx = -1; // start index of boundary
+      int idx = 0; // actual index in boundary[]
+      for(int i = off; i < off+len; i++) {
+        if (_boundary[idx] != b[i]) { // reset
+          idx = 0;
+          bidx = -1;
+        }
+        if (_boundary[idx] == b[i]) {
+          if (idx == 0) bidx = i;
+          if (++idx == _boundary.length) return bidx; // boundary found
+        }
+      }
+      if (bidx != -1) { // it seems that there is boundary but we did not match all boundary length
+        assert _lookAheadLen == 0; // There should not be not read lookahead
+        _lookAheadLen = _boundary.length - idx;
+        int readLen = _wrapped.read(_lookAheadBuf, 0, _lookAheadLen);
+        if (readLen < _boundary.length - idx) { // There is not enough data to match boundary
+          _lookAheadLen = readLen;
+          return -1;
+        }
+        for (int i = 0; i < _boundary.length - idx; i++)
+          if (_boundary[i+idx] != _lookAheadBuf[i])
+            return -1; // There is not boundary => preserve lookahead buffer
+        // Boundary found => do not care about lookAheadBuffer since all remaining data are ignored
+      }
+
+      return bidx;
     }
   }
 }

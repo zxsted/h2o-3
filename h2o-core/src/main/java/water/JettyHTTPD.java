@@ -1,9 +1,6 @@
 package water;
 
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.io.*;
 import java.net.MalformedURLException;
 import java.net.URLDecoder;
 import java.util.Enumeration;
@@ -29,6 +26,7 @@ import org.eclipse.jetty.util.ssl.SslContextFactory;
 import water.api.H2OErrorV3;
 import water.exceptions.H2OAbstractRuntimeException;
 import water.exceptions.H2OFailException;
+import water.fvec.UploadFileVec;
 import water.init.NodePersistentStorage;
 import water.util.FileUtils;
 import water.util.HttpResponseStatus;
@@ -186,27 +184,29 @@ public class JettyHTTPD {
     context.setContextPath("/");
     s.setHandler(context);
 
-    context.addServlet(H2oNpsBinServlet.class, "/3/NodePersistentStorage.bin/*");
-    context.addServlet(H2oDefaultServlet.class, "/");
+    context.addServlet(H2oNpsBinServlet.class,   "/3/NodePersistentStorage.bin/*");
+    context.addServlet(H2oPostFileServlet.class, "/3/PostFile.bin");
+    context.addServlet(H2oPostFileServlet.class, "/3/PostFile");
+    context.addServlet(H2oDefaultServlet.class,  "/");
   }
 
-  @SuppressWarnings("serial")
   public static class H2oNpsBinServlet extends HttpServlet {
     @Override
     protected void doGet(HttpServletRequest request,
                          HttpServletResponse response) throws IOException, ServletException {
-      setCommonResponseHttpHeaders(response);
       String uri = getDecodedUri(request);
-
-      Pattern p = Pattern.compile(".*/NodePersistentStorage.bin/([^/]+)/([^/]+)");
-      Matcher m = p.matcher(uri);
-      boolean b = m.matches();
-      if (!b) {
-        response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-        return;
-      }
-
       try {
+        setCommonResponseHttpHeaders(response);
+
+        Pattern p = Pattern.compile(".*/NodePersistentStorage.bin/([^/]+)/([^/]+)");
+        Matcher m = p.matcher(uri);
+        boolean b = m.matches();
+        if (!b) {
+          response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+          response.getWriter().write("Improperly formatted URI");
+          return;
+        }
+
         String categoryName = m.group(1);
         String keyName = m.group(2);
         NodePersistentStorage nps = H2O.getNPS();
@@ -219,35 +219,93 @@ public class JettyHTTPD {
         OutputStream os = response.getOutputStream();
         water.util.FileUtils.copyStream(is, os, 2048);
       } catch (Exception e) {
-        sendErrorResponse(response, e, request.getServletPath());
+        sendErrorResponse(response, e, uri);
       }
     }
 
     @Override
     protected void doPost(HttpServletRequest request,
                           HttpServletResponse response) throws IOException, ServletException {
-      setCommonResponseHttpHeaders(response);
+      String uri = getDecodedUri(request);
+      try {
+        setCommonResponseHttpHeaders(response);
+
+        Pattern p = Pattern.compile(".*NodePersistentStorage.bin/([^/]+)/([^/]+)");
+        Matcher m = p.matcher(uri);
+        boolean b = m.matches();
+        if (!b) {
+          response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+          response.getWriter().write("Improperly formatted URI");
+          return;
+        }
+
+        String categoryName = m.group(1);
+        String keyName = m.group(2);
+        H2O.getNPS().put(categoryName, keyName, request.getInputStream());
+        long length = H2O.getNPS().get_length(categoryName, keyName);
+        String responsePayload = "{ " +
+                "\"category\" : "     + "\"" + categoryName + "\", " +
+                "\"name\" : "         + "\"" + keyName      + "\", " +
+                "\"total_bytes\" : "  +        length       + " " +
+                "}\n";
+        response.setContentType("application/json");
+        response.getWriter().write(responsePayload);
+      } catch (Exception e) {
+        sendErrorResponse(response, e, uri);
+      }
+    }
+  }
+
+  public static class H2oPostFileServlet extends HttpServlet {
+    @Override
+    protected void doPost(HttpServletRequest request,
+                          HttpServletResponse response) throws IOException, ServletException {
       String uri = getDecodedUri(request);
 
-      Pattern p = Pattern.compile(".*NodePersistentStorage.bin/([^/]+)/([^/]+)");
-      Matcher m = p.matcher(uri);
-      boolean b = m.matches();
-      if (!b) {
-        response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-        return;
-      }
+      try {
+        setCommonResponseHttpHeaders(response);
 
-      String categoryName = m.group(1);
-      String keyName = m.group(2);
-      H2O.getNPS().put(categoryName, keyName, request.getInputStream());
-      long length = H2O.getNPS().get_length(categoryName, keyName);
-      String responsePayload = "{ " +
-              "\"category\" : "     + "\"" + categoryName + "\", " +
-              "\"name\" : "         + "\"" + keyName      + "\", " +
-              "\"total_bytes\" : "  +        length       + " " +
-              "}";
-      response.getWriter().write(responsePayload);
+        String destination_frame = request.getParameter("destination_frame");
+        if (destination_frame == null) {
+          destination_frame = "upload" + Key.rand();
+        }
+        if (!validKeyName(destination_frame)) {
+          response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+          response.getWriter().write("Invalid key name, contains illegal characters");
+          return;
+        }
+
+        //
+        // Here is an example of how to upload a file from the command line.
+        //
+        // curl -v -F "file=@allyears2k_headers.zip" "http://localhost:54321/PostFile.bin?destination_frame=a.zip"
+        //
+        // JSON Payload returned is:
+        //     { "destination_frame": "key_name", "total_bytes": nnn }
+        //
+        UploadFileVec.ReadPutStats stats = new UploadFileVec.ReadPutStats();
+        UploadFileVec.readPut(destination_frame, request.getInputStream(), stats);
+        String responsePayload = "{ "       +
+                "\"destination_frame\": \"" + destination_frame   + "\", " +
+                "\"total_bytes\": "         + stats.total_bytes + " " +
+                "}\n";
+        response.setContentType("application/json");
+        response.getWriter().write(responsePayload);
+      }
+      catch (Exception e) {
+        sendErrorResponse(response, e, uri);
+      }
     }
+  }
+
+  private static boolean validKeyName(String name) {
+    byte[] arr = name.getBytes();
+    for (byte b : arr) {
+      if (b == '"') return false;
+      if (b == '\\') return false;
+    }
+
+    return true;
   }
 
   private static void sendErrorResponse(HttpServletResponse response, Exception e, String uri) {

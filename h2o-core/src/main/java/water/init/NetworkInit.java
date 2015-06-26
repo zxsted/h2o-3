@@ -2,6 +2,7 @@ package water.init;
 
 import water.H2O;
 import water.H2ONode;
+import water.JettyHTTPD;
 import water.TCPReceiverThread;
 import water.util.Log;
 
@@ -305,7 +306,6 @@ public class NetworkInit {
   }
 
   public static DatagramChannel _udpSocket;
-  public static ServerSocket _apiSocket;
   // Default NIO Datagram channel
   public static DatagramChannel CLOUD_DGRAM;
 
@@ -316,6 +316,7 @@ public class NetworkInit {
     // Assign initial ports
     H2O.API_PORT = H2O.ARGS.port == 0 ? H2O.ARGS.baseport : H2O.ARGS.port;
 
+    ServerSocket apiSocket = null;
     while (true) {
       H2O.H2O_PORT = H2O.API_PORT+1;
       try {
@@ -329,10 +330,10 @@ public class NetworkInit {
         // Enabling SO_REUSEADDR prior to binding the socket using bind(SocketAddress)
         // allows the socket to be bound even though a previous connection is in a timeout state.
         // cnc: this is busted on windows.  Back to the old code.
-        _apiSocket = H2O.ARGS.ip == null
+        apiSocket = H2O.ARGS.ip == null
                 ? new ServerSocket(H2O.API_PORT)
                 : new ServerSocket(H2O.API_PORT, -1/*defaultBacklog*/, H2O.SELF_ADDRESS);
-        _apiSocket.setReuseAddress(true);
+        apiSocket.setReuseAddress(true);
         // Bind to the UDP socket
         _udpSocket = DatagramChannel.open();
         _udpSocket.socket().setReuseAddress(true);
@@ -342,13 +343,16 @@ public class NetworkInit {
         TCPReceiverThread.SOCK = ServerSocketChannel.open();
         TCPReceiverThread.SOCK.socket().setReceiveBufferSize(water.AutoBuffer.TCP_BUF_SIZ);
         TCPReceiverThread.SOCK.socket().bind(isa);
-        
+
+        apiSocket.close();
+        H2O.jetty = new JettyHTTPD(H2O.API_PORT);
+        H2O.jetty.start();
         break;
-      } catch (IOException e) {
-        if( _apiSocket != null ) try { _apiSocket.close(); } catch( IOException ohwell ) { Log.err(ohwell); }
+      } catch (Exception e) {
+        if( apiSocket != null ) try { apiSocket.close(); } catch( IOException ohwell ) { Log.err(ohwell); }
         if( _udpSocket != null ) try { _udpSocket.close(); } catch( IOException ie ) { }
         if( TCPReceiverThread.SOCK != null ) try { TCPReceiverThread.SOCK.close(); } catch( IOException ie ) { }
-        _apiSocket = null;
+        apiSocket = null;
         _udpSocket = null;
         TCPReceiverThread.SOCK = null;
         if( H2O.ARGS.port != 0 )

@@ -6,6 +6,7 @@ import jsr166y.ForkJoinPool;
 import jsr166y.ForkJoinWorkerThread;
 import org.eclipse.jetty.util.Jetty;
 import water.api.RequestServer;
+import water.api.Schema;
 import water.exceptions.H2OFailException;
 import water.exceptions.H2OIllegalArgumentException;
 import water.init.*;
@@ -833,6 +834,8 @@ final public class H2O {
   // as part of joining the cluster so all nodes have the same value.
   public static final long CLUSTER_ID = System.currentTimeMillis();
 
+  public static JettyHTTPD jetty;
+
   /** If logging has not been setup yet, then Log.info will only print to
    *  stdout.  This allows for early processing of the '-version' option
    *  without unpacking the jar file and other startup stuff.  */
@@ -949,11 +952,10 @@ final public class H2O {
 
   /** Start the web service; disallow future URL registration.
    *  Returns a Runnable that will be notified once the server is up.  */
-  static public Runnable finalizeRegistration() {
-    if( _doneRequests ) return null;
+  static public void finalizeRegistration() {
+    if( _doneRequests ) return;
     _doneRequests = true;
-    // Start the Nano HTTP server thread
-    return water.api.RequestServer.start();
+    water.api.RequestServer.finalizeRegistration();
   }
 
   // --------------------------------------------------------------------------
@@ -1307,16 +1309,6 @@ final public class H2O {
     // Clouds. This will typically trigger a round of Paxos voting so we can
     // join an existing Cloud.
     new HeartBeatThread().start();
-
-    JettyHTTPD jetty = new JettyHTTPD();
-    try {
-      jetty.start(ARGS.port, ARGS.baseport);
-    }
-    catch (Exception e) {
-      e.printStackTrace();
-      H2O.exit(1);
-    }
-    Log.info("Jetty started on port " + jetty.getPort());
 
     if (GA != null)
       startGAStartupReport();

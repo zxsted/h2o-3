@@ -46,7 +46,8 @@ public class JettyHTTPD {
   /**
    * Create bare Jetty object.
    */
-  public JettyHTTPD() {
+  public JettyHTTPD(int port) {
+    _port = port;
   }
 
   /**
@@ -58,13 +59,13 @@ public class JettyHTTPD {
   /**
    * Choose a port and start the Jetty server.
    *
-   * @param port If specified, this exact port must be used successfully or an exception is thrown.
-   * @param baseport Base port number to start looking for ports at.  Walk up to find a free one.
-   *                 If none is found before crossing 65k, throw an exception.
    * @throws Exception
    */
-  public void start(int port, int baseport) throws Exception {
-    startHttp(port, baseport);
+  public void start() throws Exception {
+    startHttp(_port);
+  }
+
+  public void acceptRequests() {
   }
 
   private void createServer(int port) throws Exception {
@@ -109,43 +110,23 @@ public class JettyHTTPD {
     }
 
     _server.start();
-    _port = port;
   }
 
-  private void startHttp(int port, int baseport) throws Exception {
-    if (port != 0) {
-      int possiblePort = port + 1000;
-      createServer(possiblePort);
-    }
-    else {
-      while ((baseport + 1000) < (1<<16)) {
-        try {
-          int possiblePort = baseport + 1000;
-          createServer(possiblePort);
-          return;
-        } catch (java.net.BindException e) {
-          baseport += 2;
-        }
-      }
-
-      throw new Exception("No available port found");
-    }
+  private void startHttp(int port) throws Exception {
+    createServer(port);
   }
 
   /**
    * This implementation is based on http://blog.denevell.org/jetty-9-ssl-https.html
    *
    * @param port See start()
-   * @param baseport See start()
    * @throws Exception
    */
-  private void startHttps(int port, int baseport) throws Exception {
-    int httpsPort = ((port != 0) ? port : baseport) + 1000;
-
+  private void startHttps(int port) throws Exception {
     _server = new Server();
     HttpConfiguration http_config = new HttpConfiguration();
     http_config.setSecureScheme("https");
-    http_config.setSecurePort(httpsPort);
+    http_config.setSecurePort(port);
 
     HttpConfiguration https_config = new HttpConfiguration(http_config);
     https_config.addCustomizer(new SecureRequestCustomizer());
@@ -157,7 +138,7 @@ public class JettyHTTPD {
             new ServerConnector(_server,
                                 new SslConnectionFactory(sslContextFactory, "http/1.1"),
                                 new HttpConnectionFactory(https_config));
-    httpsConnector.setPort(httpsPort);
+    httpsConnector.setPort(port);
 
     _server.setConnectors(new Connector[]{ httpsConnector });
     registerHandlers(_server);
@@ -171,7 +152,9 @@ public class JettyHTTPD {
    * @throws Exception
    */
   public void stop() throws Exception {
-    _server.stop();
+    if (_server != null) {
+      _server.stop();
+    }
   }
 
   /**

@@ -3,6 +3,7 @@ package hex.glm;
 import hex.DataInfo;
 import hex.ModelBuilder;
 import hex.ModelCategory;
+import hex.ModelMetricsBinomial;
 import hex.glm.GLMModel.*;
 import hex.optimization.ADMM.L1Solver;
 import hex.optimization.L_BFGS;
@@ -160,7 +161,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
     hide("_max_after_balance_size", "Not applicable since class balancing is not required for GLM.");
     hide("_class_sampling_factors", "Not applicable since class balancing is not required for GLM.");
     _parms.validate(this);
-
+    _parms._tweedie_link_power = 1 - _parms._tweedie_variance_power;
     if (expensive) {
       // bail early if we have basic errors like a missing training frame
       if (error_count() > 0) return;
@@ -380,9 +381,10 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
       for(String s:warns) warn("_validation_frame",s);
       final Submodel nullSm = new Submodel(_parms._lambda[0], _bc._betaStart, 0, itsk._gtNull._val.explainedDev(),itsk._gtNullTest != null?itsk._gtNullTest._val.residualDeviance():Double.NaN);
       _model.setSubmodel(nullSm);
-      _model._output._training_metrics = itsk._gtNull._val.makeModelMetrics(_model,_parms.train(),_dinfo._adaptedFrame.lastVec().sigma());
+
+      _model._output._training_metrics = itsk._gtNull._val.makeModelMetrics(_model,_parms.train());
       if(_valid != null)
-        _model._output._validation_metrics = itsk._gtNullTest._val.makeModelMetrics(_model,_parms.valid(),_validDinfo._adaptedFrame.lastVec().sigma());
+        _model._output._validation_metrics = itsk._gtNullTest._val.makeModelMetrics(_model,_parms.valid());
       _model.delete_and_lock(GLM.this._key);
 //      if(_parms._solver == Solver.COORDINATE_DESCENT) { // make needed vecs
 //        double eta = _parms.link(_tInfos[0]._ymu);
@@ -1077,8 +1079,10 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
                   _model._output.pickBestModel();
                   if(_model._output.bestSubmodel().lambda_value ==  _parms._lambda[_lambdaId]) {
                     // latest is the best
-                    _model._output._training_metrics = gt1._val.makeModelMetrics(_model,_parms.train(),_dinfo._adaptedFrame.lastVec().sigma());
-                    _model._output._validation_metrics = gt2._val.makeModelMetrics(_model,_parms.valid(),_validDinfo._adaptedFrame.lastVec().sigma());
+                    _model._output._training_metrics = gt1._val.makeModelMetrics(_model,_parms.train());
+                    _model._output._validation_metrics = gt2._val.makeModelMetrics(_model,_parms.valid());
+                    if(_parms._family == Family.binomial)
+                      _model._output._threshold = ((ModelMetricsBinomial)_model._output._validation_metrics)._auc.defaultThreshold();
                   }
                   _model.generateSummary(_parms._train, _taskInfo._iter);
                   _model._output._scoring_history = _sc.to2dTable();
@@ -1094,8 +1098,11 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
             _sc.addLambdaScore(_taskInfo._iter,_parms._lambda[_lambdaId], sm.rank(), gt1._val.explainedDev(), Double.NaN);
             if(score) { // set the training metrics (always the last iteration if running without validation set)
               _model._output.pickBestModel();
-              if(_model._output.bestSubmodel().lambda_value ==  _parms._lambda[_lambdaId])
-                _model._output._training_metrics = gt1._val.makeModelMetrics(_model,_parms.train(),_dinfo._adaptedFrame.lastVec().sigma());
+              if(_model._output.bestSubmodel().lambda_value ==  _parms._lambda[_lambdaId]) {
+                _model._output._training_metrics = gt1._val.makeModelMetrics(_model, _parms.train());
+                if(_parms._family == Family.binomial)
+                  _model._output._threshold = ((ModelMetricsBinomial)_model._output._training_metrics)._auc.defaultThreshold();
+              }
               _model.generateSummary(_parms._train,_taskInfo._iter);
               _model._output._scoring_history = _sc.to2dTable();
               _model.update(GLM.this._key);
@@ -1151,6 +1158,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
 
       @Override
       public void callback(final GLMIterationTask glmt) {
+        System.out.println("likelihood = " + glmt._likelihood);
         assert _parms._intercept || glmt._beta[_activeData.fullN()] == 0;
         double objVal = objVal(glmt._likelihood, glmt._beta, _parms._lambda[_lambdaId], _taskInfo._nobs, _activeData._intercept);
         if (!isRunning(GLM.this._key)) throw new JobCancelledException();
@@ -1188,7 +1196,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
         if (l1pen > 0 || _bc._betaLB != null || _bc._betaUB != null || _bc._betaGiven != null) {
           // double rho = Math.max(1e-4*_taskInfo._lambdaMax*_parms._alpha[0],_currentLambda*_parms._alpha[0]);
           GramSolver gslvr = new GramSolver(glmt._gram, glmt._xy, _parms._intercept, l2pen, l1pen /*, rho*/, _bc._betaGiven, _bc._rho, defaultRho, _bc._betaLB, _bc._betaUB);
-          new ADMM.L1Solver(1e-4, 5000).solve(gslvr, newBeta, l1pen, _parms._intercept, _bc._betaLB, _bc._betaUB);
+          new ADMM.L1Solver(1e-4, 10000).solve(gslvr, newBeta, l1pen, _parms._intercept, _bc._betaLB, _bc._betaUB);
         } else {
           glmt._gram.addDiag(l2pen);
           new GramSolver(glmt._gram,glmt._xy,_taskInfo._lambdaMax, _parms._beta_epsilon, _parms._intercept).solve(newBeta);

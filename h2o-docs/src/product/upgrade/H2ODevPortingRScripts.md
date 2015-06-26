@@ -107,6 +107,7 @@ The following parameters have been added:
 
 - `seed`: A random number to control sampling and initialization when `balance_classes` is enabled. 
 - `score_each_iteration`: Display error rate information after each tree in the requested set is built. 
+- `build_tree_one_node`: Run on a single node to use fewer CPUs. 
 
 ###GBM Algorithm Comparison
 
@@ -127,6 +128,7 @@ H2O Classic  | H2O 3.0
 `balance.classes = FALSE` | `balance_classes = FALSE,` 
 `max.after.balance.size = 5,` | `max_after_balance_size = 1,` 
  &nbsp; | `seed,` 
+ &nbsp; | `build_tree_one_node = FALSE,`
  &nbsp; | `score_each_iteration)`
 `group_split = TRUE,` | 
 `importance = FALSE,` | 
@@ -343,6 +345,8 @@ H2O Classic Parameter Name | H2O 3.0 Parameter Name
 `class.sampling.factors` | `class_sampling_factors`
 `nfolds` |  `n_folds`
 `override_with_best_model` | `overwrite_with_best_model`
+`dlmodel@model$valid_class_error` | `@model$validation_metrics@$MSE`
+
 
 ###Deprecated DL Parameters
 
@@ -350,6 +354,7 @@ The following parameters have been removed:
 
 - `classification`: Classification is now inferred from the data type.
 - `holdout_fraction`: Fraction of the training data to hold out for validation.
+- `dlmodel@model$best_cutoff`: This output parameter has been removed. 
 
 ###New DL Parameters
 
@@ -439,8 +444,8 @@ H2O Classic | H2O 3.0  | Model Type
 ------------- | ------------- | ------------- 
 `@model$priorDistribution`| &nbsp;  | `all`
 `@model$params` | `@allparameters` | `all`
-`@model$train_class_error` | `@model$training_metrics$MSE`  | `all`
-`@model$valid_class_error` | `@model$validation_metrics$MSE` | `all`
+`@model$train_class_error` | `@model$training_metrics@$MSE`  | `all`
+`@model$valid_class_error` | `@model$validation_metrics@$MSE` | `all`
 `@model$varimp` | `@model$_variable_importances` | `all`
 `@model$confusion` | `@model$training_metrics$cm$table`  | `binomial` and `multinomial`
 `@model$train_auc` | `@model$train_AUC`  | `binomial`
@@ -458,6 +463,7 @@ H2O Classic | H2O 3.0  | Model Type
 
 Distributed Random Forest (DRF) was represented as `h2o.randomForest(type="BigData", ...)` in H2O Classic. In H2O Classic, SpeeDRF (`type="fast"`) was not as accurate, especially for complex data with categoricals, and did not address regression problems. DRF (`type="BigData"`) was at least as accurate as SpeeDRF (`type="fast"`) and was the only algorithm that scaled to big data (data too large to fit on a single node). 
 In H2O 3.0, our plan is to improve the performance of DRF so that the data fits on a single node (optimally, for all cases), which will make SpeeDRF obsolete. Ultimately, the goal is provide a single algorithm that provides the "best of both worlds" for all datasets and use cases. 
+Please note that H2O does not currently support the ability to specify the number of trees when using `h2o.predict` for a DRF model. 
 
 **Note**: H2O 3.0 only supports DRF. SpeeDRF is no longer supported. The functionality of DRF in H2O 3.0 is similar to DRF functionality in H2O. 
 
@@ -491,6 +497,8 @@ The following parameters have been removed:
 - `oobee`: The out-of-bag error estimate is now computed automatically (if no validation set is specified).
 - `stat.type`: This parameter was used for SpeeDRF, which is no longer supported.
 - `type`: This parameter was used for SpeeDRF, which is no longer supported. 
+
+
 
 ###New DRF Parameters
 

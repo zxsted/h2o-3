@@ -249,6 +249,7 @@ public abstract class ASTOp extends AST {
 
     putPrefix(new ASTKappa());
     putPrefix(new ASTWhich());
+    putPrefix(new ASTWhichMax());
     putPrefix(new ASTMajorityVote());
 
 //    // Time series operations
@@ -1830,7 +1831,7 @@ class ASTSum extends ASTReducerOp {
     @Override public void map( Chunk chks[] ) {
       int rows = chks[0]._len;
       for (Chunk C : chks) {
-        assert C.vec().isNumeric();
+//        assert C.vec().isNumeric();
         double sum=_d;
         if( _narm ) for (int r = 0; r < rows; r++) { double d = C.atd(r); if( !Double.isNaN(d) ) sum += d; }
         else        for (int r = 0; r < rows; r++) { double d = C.atd(r);                        sum += d; }
@@ -1896,7 +1897,7 @@ class ASTKappa extends ASTUniPrefixOp {
         _O[x][y]++;
       }
     }
-    @Override public void reduce(OMatrixTask t) { _O=ArrayUtils.add(_O, t._O); t._O=null; }
+    @Override public void reduce(OMatrixTask t) { _O=ArrayUtils.add(_O, t._O); _aHist=ArrayUtils.add(_aHist, t._aHist); _pHist=ArrayUtils.add(_pHist,t._pHist);  t._O=null; }
   }
 }
 
@@ -3540,8 +3541,12 @@ class ASTMean extends ASTUniPrefixOp {
       throw new IllegalArgumentException("mean only applies to numeric vector.");
     if (fr.numCols() > 1) {
       double mean=0;
-      for(Vec v : fr.vecs()) mean += v.at(0);
-      env.push(new ValNum(mean/fr.numCols()));
+      double rows=0;
+      for(Vec v : fr.vecs()) {
+        double val = v.at(0);
+        if( !Double.isNaN(val)) {mean += v.at(0); rows++;}
+      }
+      env.push(new ValNum(mean/rows));
     } else {
       MeanNARMTask t = new MeanNARMTask(_narm).doAll(fr.anyVec()).getResult();
       if (t._rowcnt == 0 || Double.isNaN(t._sum)) {
@@ -4267,26 +4272,29 @@ class ASTLs extends ASTOp {
     ArrayList<String> domain = new ArrayList<>();
     Futures fs = new Futures();
     AppendableVec av = new AppendableVec(Vec.VectorGroup.VG_LEN1.addVec());
+    AppendableVec av2= new AppendableVec(Vec.VectorGroup.VG_LEN1.addVec());
     NewChunk keys = new NewChunk(av,0);
+    NewChunk szs  = new NewChunk(av2,0);
     int r = 0;
     for( Key key : KeySnapshot.globalSnapshot().keys()) {
       keys.addEnum(r++);
+      szs.addNum(getSize(key));
       domain.add(key.toString());
     }
     keys.close(fs);
+    szs.close(fs);
     Vec c0 = av.close(fs);   // c0 is the row index vec
+    Vec c1 = av2.close(fs);
     fs.blockForPending();
     String[] key_domain = new String[domain.size()];
     for (int i = 0; i < key_domain.length; ++i) key_domain[i] = domain.get(i);
     c0.setDomain(key_domain);
-    env.pushAry(new Frame(Key.make("h2o_ls"), new String[]{"key"}, new Vec[]{c0}));
+    env.pushAry(new Frame(Key.make("h2o_ls"), new String[]{"key", "byteSize"}, new Vec[]{c0,c1}));
   }
 
   private double getSize(Key k) {
-    return (double)(((Frame) k.get()).byteSize());
-//    if (k.isChunkKey()) return (double)((Chunk)DKV.get(k).get()).byteSize();
-//    if (k.isVec()) return (double)((Vec)DKV.get(k).get()).rollupStats()._size;
-//    return Double.NaN;
+    try { return (double) (((Frame) k.get()).byteSize()); }
+    catch (Exception e) { return Double.NaN; }
   }
 }
 
@@ -4616,14 +4624,78 @@ class ASTWhich extends ASTUniPrefixOp {  // 1-based index
   }
 }
 
+class ASTWhichMax extends ASTUniPrefixOp {  // 1-based index
+  ASTWhichMax() {super(null); }
+  @Override ASTWhichMax make() { return new ASTWhichMax(); }
+  @Override ASTWhichMax parse_impl(Exec E) {
+    AST condition = E.parse();
+    ASTWhichMax res = (ASTWhichMax)clone();
+    res._asts = new AST[]{condition};
+    return res;
+  }
+  @Override String opStr() { return "h2o.which.max"; }
+  @Override public void apply(Env e) {
+    Frame f=e.popAry();
+    if( f.numRows()==1 && f.numCols() > 1) {
+      int idx=0;
+      double max = -Double.MAX_VALUE;
+      for(int i=0;i<f.numCols();++i) {
+        double val=f.vecs()[i].at(0);
+        if( val > max ) {
+          max = val;
+          idx = i;
+        }
+      }
+      Futures fs = new Futures();
+      Key key = Vec.VectorGroup.VG_LEN1.addVecs(1)[0];
+      AppendableVec v = new AppendableVec(key);
+      NewChunk chunk = new NewChunk(v, 0);
+      chunk.addNum(idx+1,0);
+      chunk.close(0, fs);
+      Vec vec = v.close(fs);
+      fs.blockForPending();
+      Frame fr2 = new Frame(vec);
+      e.pushAry(fr2);
+      return;
+    }
+    Frame f2 = new MRTask() {
+      @Override public void map(Chunk[] c, NewChunk nc) {
+        for(int row=0;row<c[0]._len;++row) {
+          double max=-Double.MAX_VALUE;
+          int idx=0;
+          for(int col=0;col<c.length;++col) {
+            double val = c[col].atd(row);
+            if( val > max ) {
+              max = val;
+              idx = col;
+            }
+          }
+          nc.addNum(idx+1);
+        }
+      }
+    }.doAll(1,f).outputFrame();
+    e.pushAry(f2);
+  }
+}
+
 class ASTMajorityVote extends ASTUniPrefixOp {  // 1-based index
   int _n;
+  double[] _weights;
   ASTMajorityVote() {super(null); }
   @Override String opStr() { return "h2o.vote"; }
   @Override ASTMajorityVote make() { return new ASTMajorityVote(); }
   @Override ASTMajorityVote parse_impl(Exec E) {
     AST condition = E.parse();
     _n = (int)E.nextDbl();  // number of classes
+    AST a = E.parse();
+    if( a instanceof ASTNum ) _weights = new double[]{((ASTNum)a)._d};
+    else if( a instanceof ASTLongList ) {
+      long[] l = ((ASTLongList)a)._l;
+      _weights = new double[l.length];
+      for(int i =0;i<l.length;++i) _weights[i] = l[i];
+    } else {
+      _weights = ((ASTDoubleList) a)._d;
+    }
     ASTMajorityVote res = (ASTMajorityVote)clone();
     res._asts = new AST[]{condition};
     return res;
@@ -4631,14 +4703,15 @@ class ASTMajorityVote extends ASTUniPrefixOp {  // 1-based index
   @Override public void apply(Env e) {
     Frame f=e.popAry();
     final int n=_n;
+    final double[] weights = _weights;
     Frame f2 = new MRTask() {
       @Override public void map(Chunk[] c, NewChunk nc) {
-        int[] votes = new int[n+1];
+        double[] votes = new double[n+1];
         for(int row=0;row<c[0]._len;++row) {
           for(int i=0;i<votes.length;++i)votes[i]=0; // rezero the array each time
-          for( int col=0;col<c.length;++col) { votes[(int)c[col].at8(row)]++; }
+          for( int col=0;col<c.length;++col) { votes[(int)c[col].at8(row)] += weights[col]; };// weights[(int)(4*col+(c[col].at8(row)-1))]; }
           int i=0;
-          int max=votes[i];
+          double max=votes[i];
           int iter=0;
           while(iter < votes.length) {
             if (votes[iter] > max) { max = votes[i]; i = iter; }

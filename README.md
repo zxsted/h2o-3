@@ -217,7 +217,7 @@ Download and update h2o-3 source codes:
 ##### Step 9. Run the top-level gradle build:
 
     cd h2o-3
-    gradlew build
+    ./gradlew.bat build
 
 > If you encounter errors run again with `--stacktrace` for more instructions on missing dependencies.
 
@@ -493,14 +493,23 @@ Alex Tellez
 Allison Washburn
 Amy Wang
 Erik Eckstrand
-James Dean
 Neeraja Madabhushi
 Sebastian Vidrio
 Ben Sabrin
 Matt Dowle
 Mark Landry
-Tony D'Amato
 Erin LeDell
+Oleg Rogynskyy
+Nick Martin
+Nancy Jordan 
+Nishant Kalonia
+Nadine Hussami
+Jeff Cramer
+Stacie Spreitzer
+Vinod Iyengar
+Charlene Windom
+Parag Sanghavi
+
 
 ```
 

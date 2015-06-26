@@ -15,6 +15,8 @@ import javax.servlet.http.HttpServletResponse;
 import org.eclipse.jetty.security.*;
 import org.eclipse.jetty.security.authentication.BasicAuthenticator;
 import org.eclipse.jetty.server.*;
+import org.eclipse.jetty.server.handler.AbstractHandler;
+import org.eclipse.jetty.server.handler.HandlerCollection;
 import org.eclipse.jetty.server.handler.HandlerWrapper;
 import org.eclipse.jetty.servlet.ServletContextHandler;
 import org.eclipse.jetty.util.security.Constraint;
@@ -37,6 +39,7 @@ public class JettyHTTPD {
   // The actual port chosen port number.
   private int _port;
   private String _ip;
+  private static volatile boolean _acceptRequests = false;
 
   // Jetty server object.
   private Server _server;
@@ -65,6 +68,7 @@ public class JettyHTTPD {
   }
 
   public void acceptRequests() {
+    _acceptRequests = true;
   }
 
   private void createServer() throws Exception {
@@ -168,16 +172,38 @@ public class JettyHTTPD {
    * Hook up Jetty handlers.  Do this before start() is called.
    */
   private void registerHandlers(HandlerWrapper s) {
+    GateHandler gh = new GateHandler();
+
     ServletContextHandler context = new ServletContextHandler(
             ServletContextHandler.SECURITY | ServletContextHandler.SESSIONS
     );
     context.setContextPath("/");
-    s.setHandler(context);
 
     context.addServlet(H2oNpsBinServlet.class,   "/3/NodePersistentStorage.bin/*");
     context.addServlet(H2oPostFileServlet.class, "/3/PostFile.bin");
     context.addServlet(H2oPostFileServlet.class, "/3/PostFile");
     context.addServlet(H2oDefaultServlet.class,  "/");
+
+    Handler[] handlers = {gh, context};
+    HandlerCollection hc = new HandlerCollection();
+    hc.setHandlers(handlers);
+    s.setHandler(hc);
+  }
+
+  public class GateHandler extends AbstractHandler {
+    public GateHandler() {}
+
+    public void handle( String target,
+                        Request baseRequest,
+                        HttpServletRequest request,
+                        HttpServletResponse response ) throws IOException, ServletException {
+      while (! _acceptRequests) {
+        try {
+          Thread.sleep(100);
+        }
+        catch (Exception ignore) {}
+      }
+    }
   }
 
   public static class H2oNpsBinServlet extends HttpServlet {
